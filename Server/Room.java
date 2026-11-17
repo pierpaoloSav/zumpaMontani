@@ -10,7 +10,9 @@ import java.util.Random;
 
 public class Room extends Thread {
     // Connection variables
-    private final ArrayList<ServerThread> pool;
+        // SYNCHRONIZED IN INDEX
+        private final ArrayList<ServerThread> pool;
+        private final ArrayList<String> nicknames;
     private ServerThread admin;
     private RoomData roomData;
     private Object clientData = null;
@@ -23,6 +25,7 @@ public class Room extends Thread {
     
     public Room(RoomData data) {
         this.pool = new ArrayList<>();
+        this.nicknames = new ArrayList<>();
         this.admin = null;
         this.roomData = data;
         
@@ -41,11 +44,22 @@ public class Room extends Thread {
         }
     }
 
-    public synchronized void joinRoom(ServerThread client, String pin) throws Exception {
+    public synchronized void joinRoom(ServerThread client, String pin, String nickname) throws Exception {
         if (this.roomData.getPin().equals(pin) && 
             this.roomData.getMaxPlayers() > this.pool.size()
         ) {
             this.pool.add(client);
+
+            // Unique nickname 
+            if (this.nicknames.contains(nickname)) {
+                int i = 1;
+                while (this.nicknames.contains(nickname+String.valueOf(i))) {
+                    i++;
+                }
+                nickname += String.valueOf(i);
+            }
+            this.nicknames.add(nickname); 
+
             System.out.println("N client: " + this.pool.size());
 
             // Set admin 
@@ -58,6 +72,7 @@ public class Room extends Thread {
 
     public synchronized void removeClient(ServerThread client) throws Exception {
         if (this.pool.contains(client)) {
+            this.nicknames.remove(pool.indexOf(client));
             this.pool.remove(client);
 
             // Find new admin (take the first)
@@ -68,7 +83,6 @@ public class Room extends Thread {
         else {
             throw new Exception("Thread not found");
         }
-
     }
 
     public synchronized boolean startGame(ServerThread askedBy) {
@@ -117,6 +131,31 @@ public class Room extends Thread {
         deck.addAll(cards);
     }
 
+    private synchronized void broadcastGameData(ArrayList<ServerThread> turn) {
+        GameData base = new GameData(this.gameData);
+        for (int i = 0; i < base.size(); i++) {
+            base.getPlayer(i).setCard("000");
+        }
+
+        for (ServerThread client : this.pool) {
+            if (turn.contains(client)) {
+                //get info
+                String name = this.nicknames.get(this.pool.indexOf(client));
+                GameData temp = new GameData(base);
+                String card = gameData.getPlayerByName(name).getCard();
+
+                //set the card
+                temp.getPlayerByName(name).setCard(card);
+
+                //send
+                client.sendGameData(temp);
+            }
+            else {
+                client.sendGameData(base);
+            }
+        }
+    }
+
     @Override 
     public void run() {
         // Wait
@@ -129,9 +168,11 @@ public class Room extends Thread {
         }
 
         // Init gameData
-        for (int i = 0; i < pool.size(); i++) {
-            PlayerData temp = new PlayerData(roomData.getnLives());
-            gameData.addPlayer(temp);
+        synchronized (this) {
+            for (String nickname : nicknames) {
+                PlayerData temp = new PlayerData(nickname, roomData.getnLives());
+                gameData.addPlayer(temp);
+            }
         }
 
         // Game loop
@@ -142,6 +183,7 @@ public class Room extends Thread {
             shuffleDeck();
 
             ArrayList<ServerThread> turn = new ArrayList<>();
+            ArrayList<String> turnNicks = new ArrayList<>();
             synchronized (this) {
                 // Pick the dealer
                 int d = pool.indexOf(dealer);
@@ -156,6 +198,8 @@ public class Room extends Thread {
                     if (d >= pool.size()) d = 0;
                     dealer = pool.get(d);
                 }
+                //add dealer to data
+                gameData.getPlayerByName(nicknames.get(d)).setDealer(true);
                 
                 // Make the turn
                 int j = d+1;
@@ -163,32 +207,25 @@ public class Room extends Thread {
                     if (j >= pool.size()) j = 0;
 
                     turn.add(pool.get(j));
+                    turnNicks.add(nicknames.get(j));
                     j++;
                 }
             }
 
             // Deal cards
-            //TODO fix gameData.getPlayer facendo un hashmap che li identifica con un nick
-            //TODO strutturara come mandare il dato alla pool ad ogni cambiamento
-            for (int i = 0; i < gameData.size(); i++) {
-                gameData.getPlayer(i).setCard(deck.peekFirst());
+            for (int i = 0; i < turn.size(); i++) {
+                gameData.getPlayerByName(turnNicks.get(i)).setCard(deck.peekFirst());
                 deck.removeFirst();
             }
 
+            broadcastGameData(turn);
+            
             // Turns
-            int i = 0;
+            int n = 0;
             for (ServerThread client : turn) {
-                // Cover cards
-                GameData temp = new GameData(gameData);
-                for (int j = 0; j < temp.size(); j++) {
-                    if (i != j) temp.getPlayer(j).setCard("000");
-                }
-                client.sendGameData(temp); //? send vanno fatti in altro modo ovv
-
-                client.askPlay();
-
                 // Wait the choice
-                boolean choice = false; //def choice is to stay
+                client.askPlay();
+                boolean choice;
                 synchronized (client) {
                     while (clientData == null) {
                         try {
@@ -198,14 +235,41 @@ public class Room extends Thread {
                         }
                     }
                     choice = (Boolean)clientData;
-                    gameData.getPlayer(turn.indexOf(client)).setChoice(choice);
+                    clientData = null;
+
+                    gameData.getPlayerByName(turnNicks.get(n)).setChoice(choice);
                 }
+
+                broadcastGameData(turn);
                 
-                client.sendGameData(temp); //?
-                
-                clientData = null;
-                i++;
+                n++;
             }
+
+            // Calculate the leasts card values
+            //TODO special cards
+            ArrayList<String> leasts = new ArrayList<>();
+            int min = Integer.parseInt( gameData.getPlayer(0).getCard().substring(1) ); 
+            leasts.add(gameData.getPlayer(0).getNick());
+            for (int i = 1; i < gameData.size(); i++) {
+                PlayerData p = gameData.getPlayer(i);
+                int v = Integer.parseInt( gameData.getPlayer(i).getCard().substring(1) );
+                if (v < min) {
+                    leasts.clear();
+                    leasts.add(p.getNick());
+
+                    min = v;
+                }
+                else if (v == min) {
+                    leasts.add(p.getNick());
+                }
+            }
+
+            // Find losers
+            if (leasts.size() == 1) {
+                PlayerData p = gameData.getPlayerByName(leasts.getLast());
+                p.setLives(p.getLives()-1);
+            }
+            //TODO other cases
 
             while (true);
         }

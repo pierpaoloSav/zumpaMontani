@@ -34,6 +34,15 @@ public class GameData implements Serializable {
         return players.get(index);
     }
 
+    public PlayerData getPlayerByName(String name) {
+        for (PlayerData p : players) {
+            if (p.getNick().equals(name)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
     public int size() {
         return players.size();
     }

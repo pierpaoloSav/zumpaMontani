@@ -82,7 +82,7 @@ public class ServerThread extends Thread {
                         // Create room
                         if (handler.createRoom(roomData)) { 
                             // Join it
-                            if (handler.joinRoom(this, roomData.getRoomName(), roomData.getPin())) {
+                            if (handler.joinRoom(this, roomData.getRoomName(), roomData.getPin(), "ADMIN")) { //?temp admin nickname
                                 this.sendObject("R011");
                             }
                             else {
@@ -97,7 +97,7 @@ public class ServerThread extends Thread {
                         ArrayList<String> namePin = (ArrayList<String>) input.readObject();
                         
                         // Join room
-                        if (handler.joinRoom(this, namePin.get(0), namePin.get(1))) {
+                        if (handler.joinRoom(this, namePin.get(0), namePin.get(1), namePin.get(2))) {
                             this.sendObject("R021");
                         }
                         else {

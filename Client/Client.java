@@ -83,6 +83,7 @@ public class Client {
                                 ArrayList<String> namePin = new ArrayList<>();
                                 namePin.add("Saccu");
                                 namePin.add("12345");
+                                namePin.add("Pierpi133");
                                 
                                 client.getOutput().writeObject("R02");
                                 client.getOutput().writeObject(namePin);

@@ -116,12 +116,12 @@ public class Server {
         return true;
     }
 
-    public synchronized boolean joinRoom(ServerThread client, String roomName, String roomPin) {
+    public synchronized boolean joinRoom(ServerThread client, String roomName, String roomPin, String nickname) {
         // Find by name
         for (Room room : rooms) {
             if (room.getRoomName().equals(roomName)) {
                 try {
-                    room.joinRoom(client, roomPin);
+                    room.joinRoom(client, roomPin, nickname);
                     this.waitingPool.remove(client);
                     client.setRoom(room);
 

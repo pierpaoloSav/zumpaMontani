@@ -3,13 +3,15 @@ package Model;
 import java.io.Serializable;
 
 public class PlayerData implements Serializable {
+    private final String nick;
     private int lives;
     private String card;
     private boolean choice;
     private boolean dealer;
     private boolean myTurn;
 
-    public PlayerData(int lives) {
+    public PlayerData(String nick, int lives) {
+        this.nick = nick;
         this.lives = lives;
         this.card = "000";
         this.choice = false;
@@ -18,6 +20,7 @@ public class PlayerData implements Serializable {
     }
 
     public PlayerData(PlayerData other) {
+        this.nick = other.nick;
         this.lives = other.lives;
         this.card = other.card;
         this.choice = other.choice;
@@ -45,6 +48,10 @@ public class PlayerData implements Serializable {
         this.myTurn = myTurn;
     }
 
+    public String getNick() {
+        return nick;
+    }
+
     public String getCard() {
         return card;
     }
@@ -68,7 +75,8 @@ public class PlayerData implements Serializable {
     // PlayerData
     @Override
     public String toString() {
-        return "PlayerData{lives=" + lives +
+        return "PlayerData{nickname=" + nick +
+            "lives=" + lives +
             ", card=" + card +
             ", choice=" + choice +
             ", dealer=" + dealer +
