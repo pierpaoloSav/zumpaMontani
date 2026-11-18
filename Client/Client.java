@@ -67,7 +67,7 @@ public class Client {
                                 roomData.setRoomName("Saccu");
                                 roomData.setPin("12345");
                                 roomData.setMinPlayers(2);
-                                roomData.setMaxPlayers(5);
+                                roomData.setMaxPlayers(10);
                                 roomData.setnLives(3);
                                 roomData.setActionTimer(10);
                                 roomData.setTimeoutKick(60);

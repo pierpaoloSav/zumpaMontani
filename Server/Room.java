@@ -18,8 +18,11 @@ public class Room extends Thread {
     private Object clientData = null;
     
     // Game variables
+        // SYNCHRONIZED IN INDEX
+        private final ArrayList<ServerThread> turn;
+        private final ArrayList<String> turnNicks;
+        private ServerThread dealer;
     private volatile boolean gameStarted = false;
-    private ServerThread dealer;
     private final Deque<String> deck = new ArrayDeque<>();
     private GameData gameData;
     
@@ -29,6 +32,8 @@ public class Room extends Thread {
         this.admin = null;
         this.roomData = data;
         
+        this.turn = new ArrayList<>();
+        this.turnNicks = new ArrayList<>();
         this.dealer = null;
         this.gameData = new GameData();
     }
@@ -131,14 +136,15 @@ public class Room extends Thread {
         deck.addAll(cards);
     }
 
-    private synchronized void broadcastGameData(ArrayList<ServerThread> turn) {
+    private synchronized void broadcastGameData() {
         GameData base = new GameData(this.gameData);
         for (int i = 0; i < base.size(); i++) {
             base.getPlayer(i).setCard("000");
         }
+        //TODO carte scoperte
 
         for (ServerThread client : this.pool) {
-            if (turn.contains(client)) {
+            if (this.turn.contains(client)) {
                 //get info
                 String name = this.nicknames.get(this.pool.indexOf(client));
                 GameData temp = new GameData(base);
@@ -177,32 +183,31 @@ public class Room extends Thread {
 
         // Game loop
         while (true) {
-            Random rnd = new Random();
-
+            
             // Shuffle deck
             shuffleDeck();
 
-            ArrayList<ServerThread> turn = new ArrayList<>();
-            ArrayList<String> turnNicks = new ArrayList<>();
             synchronized (this) {
                 // Pick the dealer
-                int d = pool.indexOf(dealer);
+                int d = turn.size()-1;
                 if (d == -1) {
-                    // If first round random pick
+                    // If first round random pick from pool
+                    Random rnd = new Random();
                     dealer = pool.get(rnd.nextInt(pool.size()));
                     d = pool.indexOf(dealer);
                 }
                 else {
-                    // Else advance
+                    // Else advance the turn
                     d++;
-                    if (d >= pool.size()) d = 0;
-                    dealer = pool.get(d);
+                    if (d >= turn.size()) d = 0;
+                    dealer = turn.get(d);
                 }
                 //add dealer to data
                 gameData.getPlayerByName(nicknames.get(d)).setDealer(true);
                 
-                // Make the turn
+                // Make the turn based on dealer
                 int j = d+1;
+                turn.clear();
                 for (int i = 0; i < pool.size(); i++) {
                     if (j >= pool.size()) j = 0;
 
@@ -218,11 +223,15 @@ public class Room extends Thread {
                 deck.removeFirst();
             }
 
-            broadcastGameData(turn);
+            // Update clients
+            broadcastGameData();
             
             // Turns
-            int n = 0;
-            for (ServerThread client : turn) {
+            for (int i = 0; i < turnNicks.size(); i++) {
+                String nick = turnNicks.get(i);
+                ServerThread client = turn.get(i);
+                PlayerData p = gameData.getPlayerByName(nick);
+
                 // Wait the choice
                 client.askPlay();
                 boolean choice;
@@ -237,22 +246,50 @@ public class Room extends Thread {
                     choice = (Boolean)clientData;
                     clientData = null;
 
-                    gameData.getPlayerByName(turnNicks.get(n)).setChoice(choice);
+                    p.setChoice(choice);
                 }
 
-                broadcastGameData(turn);
-                
-                n++;
+                // Execute change
+                if (choice = true) {
+                    if (client == dealer) {
+                        //TODO scambia col mazzo
+                    }
+                    else {
+                        PlayerData next = gameData.getPlayerByName(turnNicks.get(i+1));
+                        // Check the particular cases
+                        if (next.getCardValue() == 10) {
+                            
+                        }
+                        if (next.getCardValue() == 9) {
+                            //TODO ZOMPA
+                        }
+                        else {
+                            // Change
+                            String temp = next.getCard();
+                            next.setCard(p.getCard());
+                            p.setCard(temp);
+                        }
+                    }
+                }
+
+                // Update clients
+                broadcastGameData();
             }
 
             // Calculate the leasts card values
             //TODO special cards
             ArrayList<String> leasts = new ArrayList<>();
-            int min = Integer.parseInt( gameData.getPlayer(0).getCard().substring(1) ); 
             leasts.add(gameData.getPlayer(0).getNick());
+            
+            ArrayList<String> highests = new ArrayList<>();
+            highests.add(gameData.getPlayer(0).getNick());
+            
+            int min = Integer.parseInt( gameData.getPlayer(0).getCard().substring(1) ); 
+            int max = min;
             for (int i = 1; i < gameData.size(); i++) {
                 PlayerData p = gameData.getPlayer(i);
-                int v = Integer.parseInt( gameData.getPlayer(i).getCard().substring(1) );
+                int v = gameData.getPlayer(i).getCardValue();
+
                 if (v < min) {
                     leasts.clear();
                     leasts.add(p.getNick());
@@ -262,14 +299,48 @@ public class Room extends Thread {
                 else if (v == min) {
                     leasts.add(p.getNick());
                 }
+
+                if (v > max) {
+                    highests.clear();
+                    highests.add(p.getNick());
+
+                    max = v;
+                }
+                else if (v == max) {
+                    highests.add(p.getNick());
+                }
             }
 
             // Find losers
             if (leasts.size() == 1) {
+                // The player with the worst card
                 PlayerData p = gameData.getPlayerByName(leasts.getLast());
                 p.setLives(p.getLives()-1);
             }
-            //TODO other cases
+            else if (leasts.size() == 2) {
+                // Players with the highest card
+                for (String nick : highests) {
+                    PlayerData p = gameData.getPlayerByName(nick);
+                    p.setLives(p.getLives()-1);
+                }
+            }
+            else if (leasts.size() == 3) {
+                // Only the dealer (which is always the last in turn)
+                PlayerData p = gameData.getPlayerByName(turnNicks.getLast());
+                p.setLives(p.getLives()-1);
+            }
+            else if (leasts.size() == 4) {
+                // Everybody but players with the worst card
+                for (String nick :turnNicks) {
+                    if (leasts.contains(nick)) continue;
+
+                    PlayerData p = gameData.getPlayerByName(nick);
+                    p.setLives(p.getLives()-1);
+                }
+            }
+            
+            // Update clients
+            broadcastGameData();
 
             while (true);
         }

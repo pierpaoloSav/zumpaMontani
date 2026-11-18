@@ -56,6 +56,10 @@ public class PlayerData implements Serializable {
         return card;
     }
 
+    public int getCardValue() {
+        return Integer.parseInt( card.substring(1) );
+    }
+
     public int getLives() {
         return lives;
     }
