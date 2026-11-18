@@ -5,6 +5,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 
@@ -25,6 +26,7 @@ public class Room extends Thread {
     private volatile boolean gameStarted = false;
     private final Deque<String> deck = new ArrayDeque<>();
     private GameData gameData;
+    private HashSet<String> uncoveredCards;
     
     public Room(RoomData data) {
         this.pool = new ArrayList<>();
@@ -36,6 +38,7 @@ public class Room extends Thread {
         this.turnNicks = new ArrayList<>();
         this.dealer = null;
         this.gameData = new GameData();
+        this.uncoveredCards = new HashSet<>();
     }
 
     public synchronized void closeRoom() {
@@ -139,9 +142,10 @@ public class Room extends Thread {
     private synchronized void broadcastGameData() {
         GameData base = new GameData(this.gameData);
         for (int i = 0; i < base.size(); i++) {
-            base.getPlayer(i).setCard("000");
+            PlayerData p = base.getPlayer(i);
+            if (uncoveredCards.contains(p.getCard())) continue;
+            p.setCard("000");
         }
-        //TODO carte scoperte
 
         for (ServerThread client : this.pool) {
             if (this.turn.contains(client)) {
@@ -226,7 +230,7 @@ public class Room extends Thread {
             // Update clients
             broadcastGameData();
             
-            // Turns
+            // Turn
             for (int i = 0; i < turnNicks.size(); i++) {
                 String nick = turnNicks.get(i);
                 ServerThread client = turn.get(i);
@@ -256,12 +260,21 @@ public class Room extends Thread {
                     }
                     else {
                         PlayerData next = gameData.getPlayerByName(turnNicks.get(i+1));
-                        // Check the particular cases
+                        // Tens block
                         if (next.getCardValue() == 10) {
-                            
+                            // No code needed for the block
+
+                            // Uncover
+                            uncoveredCards.add(next.getCard());
                         }
-                        if (next.getCardValue() == 9) {
-                            //TODO ZOMPA
+                        if (next.getCardValue() == 9) { 
+                            // Nines are jumped
+                            int j = 2;
+                            while (next.getCardValue() == 9) {
+                                next = gameData.getPlayerByName(turnNicks.get(i+j));
+                                
+                                //TODO vedi se ha raggiunto il mazziere 
+                            }
                         }
                         else {
                             // Change
@@ -269,6 +282,8 @@ public class Room extends Thread {
                             next.setCard(p.getCard());
                             p.setCard(temp);
                         }
+
+                        //? fai saltare il turno a re e cavalli
                     }
                 }
 
