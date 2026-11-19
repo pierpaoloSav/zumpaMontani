@@ -80,7 +80,7 @@ public class PlayerData implements Serializable {
     @Override
     public String toString() {
         return "PlayerData{nickname=" + nick +
-            "lives=" + lives +
+            ", lives=" + lives +
             ", card=" + card +
             ", choice=" + choice +
             ", dealer=" + dealer +

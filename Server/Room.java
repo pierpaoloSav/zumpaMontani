@@ -236,6 +236,9 @@ public class Room extends Thread {
                 ServerThread client = turn.get(i);
                 PlayerData p = gameData.getPlayerByName(nick);
 
+                // Nines and tens don't choice
+                if (p.getCardValue() == 10 || p.getCardValue() == 9) continue;
+
                 // Wait the choice
                 client.askPlay();
                 boolean choice;
@@ -254,9 +257,11 @@ public class Room extends Thread {
                 }
 
                 // Execute change
-                if (choice = true) {
+                if (choice == true) {
                     if (client == dealer) {
-                        //TODO scambia col mazzo
+                        // Change with the deck
+                        p.setCard(deck.peekFirst());
+                        deck.removeFirst();
                     }
                     else {
                         PlayerData next = gameData.getPlayerByName(turnNicks.get(i+1));
@@ -267,23 +272,30 @@ public class Room extends Thread {
                             // Uncover
                             uncoveredCards.add(next.getCard());
                         }
-                        if (next.getCardValue() == 9) { 
+                        else {
                             // Nines are jumped
                             int j = 2;
                             while (next.getCardValue() == 9) {
+                                // Uncover
+                                uncoveredCards.add(next.getCard());
+
                                 next = gameData.getPlayerByName(turnNicks.get(i+j));
-                                
-                                //TODO vedi se ha raggiunto il mazziere 
+                                // If you arrive to the deck change with deck
+                                if (next == null) {
+                                    p.setCard(deck.peekFirst());
+                                    deck.removeFirst();
+                                    break;
+                                }
+                                j++;
+                            }
+
+                            // Change
+                            if (next != null) {
+                                String temp = next.getCard();
+                                next.setCard(p.getCard());
+                                p.setCard(temp);    
                             }
                         }
-                        else {
-                            // Change
-                            String temp = next.getCard();
-                            next.setCard(p.getCard());
-                            p.setCard(temp);
-                        }
-
-                        //? fai saltare il turno a re e cavalli
                     }
                 }
 
