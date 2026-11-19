@@ -14,6 +14,7 @@ public class Room extends Thread {
         // SYNCHRONIZED IN INDEX
         private final ArrayList<ServerThread> pool;
         private final ArrayList<String> nicknames;
+    private volatile boolean gameStarted = false;
     private ServerThread admin;
     private RoomData roomData;
     private Object clientData = null;
@@ -22,18 +23,22 @@ public class Room extends Thread {
         // SYNCHRONIZED IN INDEX
         private final ArrayList<ServerThread> turn;
         private final ArrayList<String> turnNicks;
-        private ServerThread dealer;
-    private volatile boolean gameStarted = false;
-    private final Deque<String> deck = new ArrayDeque<>();
+    private ServerThread dealer;
     private GameData gameData;
     private HashSet<String> uncoveredCards;
     
+    // Deck
+    private final Deque<String> deck = new ArrayDeque<>();
+    private final String COVERED_CODE = "000";
+    private final String SPECIAL_LOSE_CODE = "PRE";
+    private final String SPECIAL_SAVE_CODE = "SCA";
+
     public Room(RoomData data) {
         this.pool = new ArrayList<>();
         this.nicknames = new ArrayList<>();
         this.admin = null;
         this.roomData = data;
-        
+
         this.turn = new ArrayList<>();
         this.turnNicks = new ArrayList<>();
         this.dealer = null;
@@ -132,6 +137,9 @@ public class Room extends Thread {
 
             cards.add(seeds[s] + String.format("%02d", n));
         }
+        // Special cards
+        cards.add(SPECIAL_LOSE_CODE);
+        cards.add(SPECIAL_SAVE_CODE);
         // Shuffle
         Collections.shuffle(cards);
         // Put in queue
@@ -139,12 +147,18 @@ public class Room extends Thread {
         deck.addAll(cards);
     }
 
+    private synchronized void broadcastPublicGameData() { 
+        for (ServerThread client : this.pool) {
+            client.sendGameData(gameData);
+        }
+    }
+
     private synchronized void broadcastGameData() {
         GameData base = new GameData(this.gameData);
         for (int i = 0; i < base.size(); i++) {
             PlayerData p = base.getPlayer(i);
             if (uncoveredCards.contains(p.getCard())) continue;
-            p.setCard("000");
+            p.setCard(COVERED_CODE);
         }
 
         for (ServerThread client : this.pool) {
@@ -236,8 +250,9 @@ public class Room extends Thread {
                 ServerThread client = turn.get(i);
                 PlayerData p = gameData.getPlayerByName(nick);
 
-                // Nines and tens don't choice
-                if (p.getCardValue() == 10 || p.getCardValue() == 9) continue;
+                // Nines and tens and specials don't choice
+                if (p.getCardValue() == 10 || p.getCardValue() == 9 ||
+                    p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE)) continue;
 
                 // Wait the choice
                 client.askPlay();
@@ -304,18 +319,26 @@ public class Room extends Thread {
             }
 
             // Calculate the leasts card values
-            //TODO special cards
             ArrayList<String> leasts = new ArrayList<>();
             leasts.add(gameData.getPlayer(0).getNick());
             
             ArrayList<String> highests = new ArrayList<>();
             highests.add(gameData.getPlayer(0).getNick());
             
-            int min = Integer.parseInt( gameData.getPlayer(0).getCard().substring(1) ); 
+            PlayerData specialLose = null;
+
+            int min = gameData.getPlayer(0).getCardValue();
             int max = min;
             for (int i = 1; i < gameData.size(); i++) {
                 PlayerData p = gameData.getPlayer(i);
-                int v = gameData.getPlayer(i).getCardValue();
+                int v = p.getCardValue();
+                
+                //special
+                if (p.getCard().equals(SPECIAL_LOSE_CODE)) {
+                    specialLose = p;
+                    break;
+                }
+                if (v == -1) continue;
 
                 if (v < min) {
                     leasts.clear();
@@ -339,22 +362,35 @@ public class Room extends Thread {
             }
 
             // Find losers
-            if (leasts.size() == 1) {
+            if (specialLose != null) {
+                specialLose.setLives(specialLose.getLives()-1);
+            }
+            else if (leasts.size() == 1) {
                 // The player with the worst card
                 PlayerData p = gameData.getPlayerByName(leasts.getLast());
-                p.setLives(p.getLives()-1);
+                
+                // Special immunity
+                if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                    p.setLives(p.getLives()-1);
+                }
             }
             else if (leasts.size() == 2) {
                 // Players with the highest card
                 for (String nick : highests) {
                     PlayerData p = gameData.getPlayerByName(nick);
-                    p.setLives(p.getLives()-1);
+                    // Special immunity
+                    if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                        p.setLives(p.getLives()-1);
+                    }
                 }
             }
             else if (leasts.size() == 3) {
                 // Only the dealer (which is always the last in turn)
                 PlayerData p = gameData.getPlayerByName(turnNicks.getLast());
-                p.setLives(p.getLives()-1);
+                // Special immunity
+                if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                    p.setLives(p.getLives()-1);
+                }
             }
             else if (leasts.size() == 4) {
                 // Everybody but players with the worst card
@@ -362,12 +398,15 @@ public class Room extends Thread {
                     if (leasts.contains(nick)) continue;
 
                     PlayerData p = gameData.getPlayerByName(nick);
-                    p.setLives(p.getLives()-1);
+                    // Special immunity
+                    if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                        p.setLives(p.getLives()-1);
+                    }
                 }
             }
             
             // Update clients
-            broadcastGameData();
+            broadcastPublicGameData();
 
             while (true);
         }
