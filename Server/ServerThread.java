@@ -12,6 +12,7 @@ public class ServerThread extends Thread {
     private final Server handler;
     private final Socket client;
     private Room room;
+    private boolean connected = true;
 
     // Streams
     private final ObjectOutputStream output;
@@ -25,6 +26,10 @@ public class ServerThread extends Thread {
         // Streams
         this.output = new ObjectOutputStream(client.getOutputStream());
         this.input = new ObjectInputStream(client.getInputStream());
+    }
+    
+    public boolean isConnected() {
+        return connected;
     }
 
     public synchronized void sendObject(Object obj) {
@@ -46,6 +51,7 @@ public class ServerThread extends Thread {
         // Close
         try {
             client.close();
+            connected = false;
         } catch (IOException e) {
             System.err.println("Error closing client comm:" + e.getMessage());
         }

@@ -93,8 +93,22 @@ public class Room extends Thread {
             // Remove from turn
             if (turn.contains(client)) {
                 String nick = turnNicks.get(this.turn.indexOf(client));
-                this.gameData.removePlayerByName(nick);
+                
+                if (this.gameData.getPlayerByName(nick).isDealer()) {
+                    int d = this.turnNicks.indexOf(nick) - 1;
+                    String ds;
+                    if (d == -1) {
+                        ds = this.turnNicks.getLast();
+                    }
+                    else {
+                        ds = this.turnNicks.get(d);
+                    }
 
+                    this.gameData.getPlayerByName(ds).setDealer(true);
+                }
+
+                //remove
+                this.gameData.removePlayerByName(nick);
                 this.turnNicks.remove(nick);
                 this.turn.remove(client);
             }
@@ -106,6 +120,19 @@ public class Room extends Thread {
         }
         else {
             throw new Exception("Thread not found");
+        }
+    }
+
+    public synchronized void playerToSpectator(ServerThread client) {
+        if (turn.contains(client)) {
+            String nick = turnNicks.get(this.turn.indexOf(client));
+            
+            //! solve dealer eliminated bug
+
+            //remove
+            this.gameData.removePlayerByName(nick);
+            this.turnNicks.remove(nick);
+            this.turn.remove(client);
         }
     }
 
@@ -283,25 +310,29 @@ public class Room extends Thread {
                 broadcastGameData();
 
                 // Blocks and jumps dont choice
-                if (p.getCardValue() == BLOCK_VALUE || p.getCardValue() == JUMP_VALUE) continue;
+                if (p.getCardValue() == BLOCK_VALUE || p.getCardValue() == JUMP_VALUE) {
+                    p.setMyTurn(false); 
+                    continue;
+                }
 
                 // Wait the choice
                 client.askPlay();
                 boolean choice;
                 synchronized (client) {
                     //TODO action timer, timeout kick
-                    //TODO mentre è in wait deve essere cacciato lo stesso
-                    //TODO deve scalare il dealer
-                    //TODO chi ha perso viene cacciato
 
-                    while (clientData == null) {
+                    while (clientData == null && client.isConnected()) {
                         try {
                             client.wait();
                         } catch (InterruptedException e) {
                             System.err.println("Error reading data: " + e.getMessage());
                         }
                     }
-                    choice = (Boolean)clientData;
+                    if (clientData != null)
+                        choice = (Boolean)clientData;
+                    else 
+                        choice = false; //default is staying
+                    
                     clientData = null;
 
                     p.setChoice(choice);
@@ -314,27 +345,25 @@ public class Room extends Thread {
                         p.setCard(deck.removeFirst());
                     }
                     else {
-                        int j = 1;
                         PlayerData next = null;
+                        int nextIndex = i + 1;
 
-                        // Find the next player who doesnt have a jump card
-                        while (j < turnNicks.size()) {
-                            int nextIndex = (i + j) % turnNicks.size();
+                        // Find the next player (up to the dealer, last in turn) without a jump card
+                        while (nextIndex < turnNicks.size()) {
+                            PlayerData candidate = gameData.getPlayerByName(turnNicks.get(nextIndex));
 
-                            next = gameData.getPlayerByName(turnNicks.get(nextIndex));
-
-                            if (next.getCardValue() != JUMP_VALUE) {
+                            if (candidate.getCardValue() != JUMP_VALUE) {
+                                next = candidate;
                                 break;
                             }
 
                             // Uncover the jump card
-                            uncoveredCards.add(next.getCard());
-
-                            j++;
+                            uncoveredCards.add(candidate.getCard());
+                            nextIndex++;
                         }
 
-                        // If all remaining players have a jump card, change with the deck
-                        if (j >= turnNicks.size()) {
+                        if (next == null) {
+                            // Everyone after me (dealer included) has a jump card: change with the deck
                             p.setCard(deck.removeFirst());
                         }
                         else if (next.getCardValue() == BLOCK_VALUE) {
@@ -355,24 +384,21 @@ public class Room extends Thread {
 
             // Calculate the leasts card values
             ArrayList<String> leasts = new ArrayList<>();
-            leasts.add(gameData.getPlayer(0).getNick());
-            
             ArrayList<String> highests = new ArrayList<>();
-            highests.add(gameData.getPlayer(0).getNick());
 
-            int min = gameData.getPlayer(0).getCardValue();
-            int max = min;
-            for (int i = 1; i < gameData.size(); i++) {
+            int min = Integer.MAX_VALUE;
+            int max = Integer.MIN_VALUE;
+
+            for (int i = 0; i < gameData.size(); i++) {
                 PlayerData p = gameData.getPlayer(i);
                 int v = p.getCardValue();
-                
-                //skip special
+
+                // skip special
                 if (v == -1) continue;
 
                 if (v < min) {
                     leasts.clear();
                     leasts.add(p.getNick());
-
                     min = v;
                 }
                 else if (v == min) {
@@ -382,7 +408,6 @@ public class Room extends Thread {
                 if (v > max) {
                     highests.clear();
                     highests.add(p.getNick());
-
                     max = v;
                 }
                 else if (v == max) {
@@ -442,6 +467,15 @@ public class Room extends Thread {
                     if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
                         p.setLives(p.getLives()-1);
                     }
+                }
+            }
+
+            // Find dead players
+            for (int i = 0; i < gameData.size(); i++) {
+                PlayerData p = gameData.getPlayer(i);
+                int n = turnNicks.indexOf(p.getNick());
+                if (p.getLives() <= 0) {
+                    playerToSpectator(turn.get(n));
                 }
             }
             
