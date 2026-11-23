@@ -30,6 +30,15 @@ public class GameData implements Serializable {
         return players.remove(index);
     }
 
+    public boolean removePlayerByName(String name) {
+        for (PlayerData p : players) {
+            if (p.getNick().equals(name)) {
+                return players.remove(p);
+            }
+        }
+        return false;
+    }
+
     public PlayerData getPlayer(int index) {
         return players.get(index);
     }

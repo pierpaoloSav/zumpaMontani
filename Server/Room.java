@@ -14,24 +14,26 @@ public class Room extends Thread {
         // SYNCHRONIZED IN INDEX
         private final ArrayList<ServerThread> pool;
         private final ArrayList<String> nicknames;
+        private ServerThread admin;
     private volatile boolean gameStarted = false;
-    private ServerThread admin;
+    
     private RoomData roomData;
     private Object clientData = null;
     
     // Game variables
         // SYNCHRONIZED IN INDEX
-        private final ArrayList<ServerThread> turn;
-        private final ArrayList<String> turnNicks;
-    private ServerThread dealer;
-    private GameData gameData;
-    private HashSet<String> uncoveredCards;
+        private final ArrayList<ServerThread> turn; 
+        private final ArrayList<String> turnNicks; 
+    private GameData gameData; 
+    private HashSet<String> uncoveredCards; 
     
     // Deck
     private final Deque<String> deck = new ArrayDeque<>();
     private final String COVERED_CODE = "000";
     private final String SPECIAL_LOSE_CODE = "PRE";
     private final String SPECIAL_SAVE_CODE = "SCA";
+    private final int BLOCK_VALUE = 10;
+    private final int JUMP_VALUE = 9;
 
     public Room(RoomData data) {
         this.pool = new ArrayList<>();
@@ -41,7 +43,6 @@ public class Room extends Thread {
 
         this.turn = new ArrayList<>();
         this.turnNicks = new ArrayList<>();
-        this.dealer = null;
         this.gameData = new GameData();
         this.uncoveredCards = new HashSet<>();
     }
@@ -85,8 +86,18 @@ public class Room extends Thread {
 
     public synchronized void removeClient(ServerThread client) throws Exception {
         if (this.pool.contains(client)) {
+            // Remove from pool
             this.nicknames.remove(pool.indexOf(client));
             this.pool.remove(client);
+
+            // Remove from turn
+            if (turn.contains(client)) {
+                String nick = turnNicks.get(this.turn.indexOf(client));
+                this.gameData.removePlayerByName(nick);
+
+                this.turnNicks.remove(nick);
+                this.turn.remove(client);
+            }
 
             // Find new admin (take the first)
             if (client == this.admin) {
@@ -202,35 +213,55 @@ public class Room extends Thread {
         // Game loop
         while (true) {
             
-            // Shuffle deck
+            // Prepare class variables
             shuffleDeck();
+            uncoveredCards.clear();
+            for (int i = 0; i < gameData.size(); i++) {
+                gameData.getPlayer(i).setChoice(false);
+            }
 
             synchronized (this) {
-                // Pick the dealer
-                int d = turn.size()-1;
-                if (d == -1) {
-                    // If first round random pick from pool
-                    Random rnd = new Random();
-                    dealer = pool.get(rnd.nextInt(pool.size()));
-                    d = pool.indexOf(dealer);
-                }
-                else {
-                    // Else advance the turn
-                    d++;
-                    if (d >= turn.size()) d = 0;
-                    dealer = turn.get(d);
-                }
-                //add dealer to data
-                gameData.getPlayerByName(nicknames.get(d)).setDealer(true);
-                
-                // Make the turn based on dealer
-                int j = d+1;
-                turn.clear();
-                for (int i = 0; i < pool.size(); i++) {
-                    if (j >= pool.size()) j = 0;
+                String dealerNick = null;
 
-                    turn.add(pool.get(j));
-                    turnNicks.add(nicknames.get(j));
+                // Find the previous dealer
+                for (int i = 0; i < gameData.size(); i++) {
+                    if (gameData.getPlayer(i).isDealer()) {
+                        //change and get nick
+                        gameData.getPlayer(i).setDealer(false);
+                        if (i+1 >= gameData.size()) {
+                            gameData.getPlayer(0).setDealer(true);
+                            dealerNick = gameData.getPlayer(0).getNick();
+                        }
+                        else {
+                            gameData.getPlayer(i+1).setDealer(true);
+                            dealerNick = gameData.getPlayer(i+1).getNick();
+                        }
+                        break;
+                    }
+                }
+                // First round: select random
+                if (dealerNick == null) {
+                    Random rnd = new Random();
+                    int n = rnd.nextInt(gameData.size());
+                    gameData.getPlayer(n).setDealer(true);
+                    dealerNick = gameData.getPlayer(n).getNick();
+                }
+
+                // Build the turn
+                turn.clear();
+                turnNicks.clear();
+                int dealerIndex = nicknames.indexOf(dealerNick);
+
+                // Make the turn based on dealer
+                int j = dealerIndex + 1;
+                for (int i = 0; i < gameData.size(); i++) {
+                    if (j >= gameData.size()) j = 0;
+
+                    String nickname = gameData.getPlayer(j).getNick();
+
+                    turnNicks.add(nickname);
+                    turn.add(pool.get(nicknames.indexOf(nickname)));
+
                     j++;
                 }
             }
@@ -240,24 +271,29 @@ public class Room extends Thread {
                 gameData.getPlayerByName(turnNicks.get(i)).setCard(deck.peekFirst());
                 deck.removeFirst();
             }
-
-            // Update clients
-            broadcastGameData();
             
             // Turn
             for (int i = 0; i < turnNicks.size(); i++) {
                 String nick = turnNicks.get(i);
                 ServerThread client = turn.get(i);
                 PlayerData p = gameData.getPlayerByName(nick);
+                p.setMyTurn(true);
 
-                // Nines and tens and specials don't choice
-                if (p.getCardValue() == 10 || p.getCardValue() == 9 ||
-                    p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE)) continue;
+                // Update clients
+                broadcastGameData();
+
+                // Blocks and jumps dont choice
+                if (p.getCardValue() == BLOCK_VALUE || p.getCardValue() == JUMP_VALUE) continue;
 
                 // Wait the choice
                 client.askPlay();
                 boolean choice;
                 synchronized (client) {
+                    //TODO action timer, timeout kick
+                    //TODO mentre è in wait deve essere cacciato lo stesso
+                    //TODO deve scalare il dealer
+                    //TODO chi ha perso viene cacciato
+
                     while (clientData == null) {
                         try {
                             client.wait();
@@ -272,50 +308,49 @@ public class Room extends Thread {
                 }
 
                 // Execute change
-                if (choice == true) {
-                    if (client == dealer) {
+                if (choice) {
+                    if (p.isDealer()) {
                         // Change with the deck
-                        p.setCard(deck.peekFirst());
-                        deck.removeFirst();
+                        p.setCard(deck.removeFirst());
                     }
                     else {
-                        PlayerData next = gameData.getPlayerByName(turnNicks.get(i+1));
-                        // Tens block
-                        if (next.getCardValue() == 10) {
-                            // No code needed for the block
+                        int j = 1;
+                        PlayerData next = null;
 
-                            // Uncover
+                        // Find the next player who doesnt have a jump card
+                        while (j < turnNicks.size()) {
+                            int nextIndex = (i + j) % turnNicks.size();
+
+                            next = gameData.getPlayerByName(turnNicks.get(nextIndex));
+
+                            if (next.getCardValue() != JUMP_VALUE) {
+                                break;
+                            }
+
+                            // Uncover the jump card
+                            uncoveredCards.add(next.getCard());
+
+                            j++;
+                        }
+
+                        // If all remaining players have a jump card, change with the deck
+                        if (j >= turnNicks.size()) {
+                            p.setCard(deck.removeFirst());
+                        }
+                        else if (next.getCardValue() == BLOCK_VALUE) {
+                            // Block card blocks the exchange
                             uncoveredCards.add(next.getCard());
                         }
                         else {
-                            // Nines are jumped
-                            int j = 2;
-                            while (next.getCardValue() == 9) {
-                                // Uncover
-                                uncoveredCards.add(next.getCard());
-
-                                next = gameData.getPlayerByName(turnNicks.get(i+j));
-                                // If you arrive to the deck change with deck
-                                if (next == null) {
-                                    p.setCard(deck.peekFirst());
-                                    deck.removeFirst();
-                                    break;
-                                }
-                                j++;
-                            }
-
-                            // Change
-                            if (next != null) {
-                                String temp = next.getCard();
-                                next.setCard(p.getCard());
-                                p.setCard(temp);    
-                            }
+                            // Exchange cards
+                            String temp = next.getCard();
+                            next.setCard(p.getCard());
+                            p.setCard(temp);
                         }
                     }
                 }
 
-                // Update clients
-                broadcastGameData();
+                p.setMyTurn(false);
             }
 
             // Calculate the leasts card values
@@ -324,8 +359,6 @@ public class Room extends Thread {
             
             ArrayList<String> highests = new ArrayList<>();
             highests.add(gameData.getPlayer(0).getNick());
-            
-            PlayerData specialLose = null;
 
             int min = gameData.getPlayer(0).getCardValue();
             int max = min;
@@ -333,11 +366,7 @@ public class Room extends Thread {
                 PlayerData p = gameData.getPlayer(i);
                 int v = p.getCardValue();
                 
-                //special
-                if (p.getCard().equals(SPECIAL_LOSE_CODE)) {
-                    specialLose = p;
-                    break;
-                }
+                //skip special
                 if (v == -1) continue;
 
                 if (v < min) {
@@ -358,6 +387,17 @@ public class Room extends Thread {
                 }
                 else if (v == max) {
                     highests.add(p.getNick());
+                }
+            }
+
+            // Find SPECIAL_LOSE_CODE
+            PlayerData specialLose = null;
+            for (int i = 0; i < gameData.size(); i++) {
+                PlayerData p = gameData.getPlayer(i);
+
+                if (SPECIAL_LOSE_CODE.equals(p.getCard())) {
+                    specialLose = p;
+                    break;
                 }
             }
 
@@ -408,7 +448,12 @@ public class Room extends Thread {
             // Update clients
             broadcastPublicGameData();
 
-            while (true);
+            // Wait for new round
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                System.err.println("Error sleeping: " + e.getMessage());
+            }
         }
     }
 }
