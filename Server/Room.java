@@ -127,7 +127,11 @@ public class Room extends Thread {
         if (turn.contains(client)) {
             String nick = turnNicks.get(this.turn.indexOf(client));
             
-            //! solve dealer eliminated bug
+            // Put dealer the previous player
+            if (this.gameData.getPlayerByName(nick).isDealer()) {
+                String prev = this.turnNicks.get(this.turnNicks.indexOf(nick)-1);
+                this.gameData.getPlayerByName(prev).setDealer(true);
+            }
 
             //remove
             this.gameData.removePlayerByName(nick);
@@ -427,6 +431,7 @@ public class Room extends Thread {
             }
 
             // Find losers
+            //on second and fourth case if all cards are the same (min == max) its a tie 
             if (specialLose != null) {
                 specialLose.setLives(specialLose.getLives()-1);
             }
@@ -439,7 +444,7 @@ public class Room extends Thread {
                     p.setLives(p.getLives()-1);
                 }
             }
-            else if (leasts.size() == 2) {
+            else if (leasts.size() == 2 && min != max) {
                 // Players with the highest card
                 for (String nick : highests) {
                     PlayerData p = gameData.getPlayerByName(nick);
@@ -457,7 +462,7 @@ public class Room extends Thread {
                     p.setLives(p.getLives()-1);
                 }
             }
-            else if (leasts.size() == 4) {
+            else if (leasts.size() == 4 && min != max) {
                 // Everybody but players with the worst card
                 for (String nick :turnNicks) {
                     if (leasts.contains(nick)) continue;
@@ -470,6 +475,9 @@ public class Room extends Thread {
                 }
             }
 
+            // Update clients
+            broadcastPublicGameData();
+
             // Find dead players
             for (int i = 0; i < gameData.size(); i++) {
                 PlayerData p = gameData.getPlayer(i);
@@ -478,9 +486,6 @@ public class Room extends Thread {
                     playerToSpectator(turn.get(n));
                 }
             }
-            
-            // Update clients
-            broadcastPublicGameData();
 
             // Wait for new round
             try {
