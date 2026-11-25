@@ -75,6 +75,11 @@ public class ServerThread extends Thread {
         this.sendObject(data);
     }
 
+    public void sendWinner(String winner) {
+        this.sendObject("V");
+        this.sendObject(winner);
+    }
+
     @Override 
     public void run() {
         try {

@@ -142,6 +142,11 @@ public class Client {
                         if (msg.equals("P")) {
                             System.out.println("INSERISCI SCELTA: ");
                         }
+
+                        if (msg.equals("V")) {
+                            Object data = (String)client.getInput().readObject();
+                            System.out.println("VINCITORE: " + data);
+                        }
                     }
                 } catch (Exception e) {
                     System.err.println("Error in stream input: " + e.getMessage());

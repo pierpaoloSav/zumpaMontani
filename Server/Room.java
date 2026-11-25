@@ -224,274 +224,287 @@ public class Room extends Thread {
 
     @Override 
     public void run() {
-        // Wait
-        while (!gameStarted) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                System.err.println("Error sleeping: " + e.getMessage());
-            }
-        }
-
-        // Init gameData
-        synchronized (this) {
-            for (String nickname : nicknames) {
-                PlayerData temp = new PlayerData(nickname, roomData.getnLives());
-                gameData.addPlayer(temp);
-            }
-        }
-
-        // Game loop
-        while (true) {
-            
-            // Prepare class variables
-            shuffleDeck();
-            uncoveredCards.clear();
-            for (int i = 0; i < gameData.size(); i++) {
-                gameData.getPlayer(i).setChoice(false);
+        while (pool.size() > 0) {
+            // Wait
+            while (!gameStarted) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    System.err.println("Error sleeping: " + e.getMessage());
+                }
             }
 
+            // Init gameData
+            gameData = new GameData();
             synchronized (this) {
-                String dealerNick = null;
+                for (String nickname : nicknames) {
+                    PlayerData temp = new PlayerData(nickname, roomData.getnLives());
+                    gameData.addPlayer(temp);
+                }
+            }
 
-                // Find the previous dealer
+            // Game loop
+            while (gameStarted) {
+                
+                // Prepare class variables
+                shuffleDeck();
+                uncoveredCards.clear();
                 for (int i = 0; i < gameData.size(); i++) {
-                    if (gameData.getPlayer(i).isDealer()) {
-                        //change and get nick
-                        gameData.getPlayer(i).setDealer(false);
-                        if (i+1 >= gameData.size()) {
-                            gameData.getPlayer(0).setDealer(true);
-                            dealerNick = gameData.getPlayer(0).getNick();
+                    gameData.getPlayer(i).setChoice(false);
+                }
+
+                synchronized (this) {
+                    String dealerNick = null;
+
+                    // Find the previous dealer
+                    for (int i = 0; i < gameData.size(); i++) {
+                        if (gameData.getPlayer(i).isDealer()) {
+                            //change and get nick
+                            gameData.getPlayer(i).setDealer(false);
+                            if (i+1 >= gameData.size()) {
+                                gameData.getPlayer(0).setDealer(true);
+                                dealerNick = gameData.getPlayer(0).getNick();
+                            }
+                            else {
+                                gameData.getPlayer(i+1).setDealer(true);
+                                dealerNick = gameData.getPlayer(i+1).getNick();
+                            }
+                            break;
+                        }
+                    }
+                    // First round: select random
+                    if (dealerNick == null) {
+                        Random rnd = new Random();
+                        int n = rnd.nextInt(gameData.size());
+                        gameData.getPlayer(n).setDealer(true);
+                        dealerNick = gameData.getPlayer(n).getNick();
+                    }
+
+                    // Build the turn
+                    turn.clear();
+                    turnNicks.clear();
+                    int dealerIndex = nicknames.indexOf(dealerNick);
+
+                    // Make the turn based on dealer
+                    int j = dealerIndex + 1;
+                    for (int i = 0; i < gameData.size(); i++) {
+                        if (j >= gameData.size()) j = 0;
+
+                        String nickname = gameData.getPlayer(j).getNick();
+
+                        turnNicks.add(nickname);
+                        turn.add(pool.get(nicknames.indexOf(nickname)));
+
+                        j++;
+                    }
+                }
+
+                // Deal cards
+                for (int i = 0; i < turn.size(); i++) {
+                    gameData.getPlayerByName(turnNicks.get(i)).setCard(deck.peekFirst());
+                    deck.removeFirst();
+                }
+                
+                // Turn
+                for (int i = 0; i < turnNicks.size(); i++) {
+                    String nick = turnNicks.get(i);
+                    ServerThread client = turn.get(i);
+                    PlayerData p = gameData.getPlayerByName(nick);
+                    p.setMyTurn(true);
+
+                    // Update clients
+                    broadcastGameData();
+
+                    // Blocks and jumps dont choice
+                    if (p.getCardValue() == BLOCK_VALUE || p.getCardValue() == JUMP_VALUE) {
+                        p.setMyTurn(false); 
+                        continue;
+                    }
+
+                    // Wait the choice
+                    client.askPlay();
+                    boolean choice;
+                    synchronized (client) {
+                        //TODO action timer, timeout kick
+
+                        while (clientData == null && client.isConnected()) {
+                            try {
+                                client.wait();
+                            } catch (InterruptedException e) {
+                                System.err.println("Error reading data: " + e.getMessage());
+                            }
+                        }
+                        if (clientData != null)
+                            choice = (Boolean)clientData;
+                        else 
+                            choice = false; //default is staying
+                        
+                        clientData = null;
+
+                        p.setChoice(choice);
+                    }
+
+                    // Execute change
+                    if (choice) {
+                        if (p.isDealer()) {
+                            // Change with the deck
+                            p.setCard(deck.removeFirst());
                         }
                         else {
-                            gameData.getPlayer(i+1).setDealer(true);
-                            dealerNick = gameData.getPlayer(i+1).getNick();
+                            PlayerData next = null;
+                            int nextIndex = i + 1;
+
+                            // Find the next player (up to the dealer, last in turn) without a jump card
+                            while (nextIndex < turnNicks.size()) {
+                                PlayerData candidate = gameData.getPlayerByName(turnNicks.get(nextIndex));
+
+                                if (candidate.getCardValue() != JUMP_VALUE) {
+                                    next = candidate;
+                                    break;
+                                }
+
+                                // Uncover the jump card
+                                uncoveredCards.add(candidate.getCard());
+                                nextIndex++;
+                            }
+
+                            if (next == null) {
+                                // Everyone after me (dealer included) has a jump card: change with the deck
+                                p.setCard(deck.removeFirst());
+                            }
+                            else if (next.getCardValue() == BLOCK_VALUE) {
+                                // Block card blocks the exchange
+                                uncoveredCards.add(next.getCard());
+                            }
+                            else {
+                                // Exchange cards
+                                String temp = next.getCard();
+                                next.setCard(p.getCard());
+                                p.setCard(temp);
+                            }
                         }
+                    }
+
+                    p.setMyTurn(false);
+                }
+
+                // Calculate the leasts card values
+                ArrayList<String> leasts = new ArrayList<>();
+                ArrayList<String> highests = new ArrayList<>();
+
+                int min = Integer.MAX_VALUE;
+                int max = Integer.MIN_VALUE;
+
+                for (int i = 0; i < gameData.size(); i++) {
+                    PlayerData p = gameData.getPlayer(i);
+                    int v = p.getCardValue();
+
+                    // skip special
+                    if (v == -1) continue;
+
+                    if (v < min) {
+                        leasts.clear();
+                        leasts.add(p.getNick());
+                        min = v;
+                    }
+                    else if (v == min) {
+                        leasts.add(p.getNick());
+                    }
+
+                    if (v > max) {
+                        highests.clear();
+                        highests.add(p.getNick());
+                        max = v;
+                    }
+                    else if (v == max) {
+                        highests.add(p.getNick());
+                    }
+                }
+
+                // Find SPECIAL_LOSE_CODE
+                PlayerData specialLose = null;
+                for (int i = 0; i < gameData.size(); i++) {
+                    PlayerData p = gameData.getPlayer(i);
+
+                    if (SPECIAL_LOSE_CODE.equals(p.getCard())) {
+                        specialLose = p;
                         break;
                     }
                 }
-                // First round: select random
-                if (dealerNick == null) {
-                    Random rnd = new Random();
-                    int n = rnd.nextInt(gameData.size());
-                    gameData.getPlayer(n).setDealer(true);
-                    dealerNick = gameData.getPlayer(n).getNick();
+
+                // Find losers
+                //on second and fourth case if all cards are the same (min == max) its a tie 
+                if (specialLose != null) {
+                    specialLose.setLives(specialLose.getLives()-1);
                 }
-
-                // Build the turn
-                turn.clear();
-                turnNicks.clear();
-                int dealerIndex = nicknames.indexOf(dealerNick);
-
-                // Make the turn based on dealer
-                int j = dealerIndex + 1;
-                for (int i = 0; i < gameData.size(); i++) {
-                    if (j >= gameData.size()) j = 0;
-
-                    String nickname = gameData.getPlayer(j).getNick();
-
-                    turnNicks.add(nickname);
-                    turn.add(pool.get(nicknames.indexOf(nickname)));
-
-                    j++;
+                else if (leasts.size() == 1) {
+                    // The player with the worst card
+                    PlayerData p = gameData.getPlayerByName(leasts.getLast());
+                    
+                    // Special immunity
+                    if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                        p.setLives(p.getLives()-1);
+                    }
                 }
-            }
+                else if (leasts.size() == 2 && min != max) {
+                    // Players with the highest card
+                    for (String nick : highests) {
+                        PlayerData p = gameData.getPlayerByName(nick);
+                        // Special immunity
+                        if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                            p.setLives(p.getLives()-1);
+                        }
+                    }
+                }
+                else if (leasts.size() == 3) {
+                    // Only the dealer (which is always the last in turn)
+                    PlayerData p = gameData.getPlayerByName(turnNicks.getLast());
+                    // Special immunity
+                    if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                        p.setLives(p.getLives()-1);
+                    }
+                }
+                else if (leasts.size() == 4 && min != max) {
+                    // Everybody but players with the worst card
+                    for (String nick :turnNicks) {
+                        if (leasts.contains(nick)) continue;
 
-            // Deal cards
-            for (int i = 0; i < turn.size(); i++) {
-                gameData.getPlayerByName(turnNicks.get(i)).setCard(deck.peekFirst());
-                deck.removeFirst();
-            }
-            
-            // Turn
-            for (int i = 0; i < turnNicks.size(); i++) {
-                String nick = turnNicks.get(i);
-                ServerThread client = turn.get(i);
-                PlayerData p = gameData.getPlayerByName(nick);
-                p.setMyTurn(true);
+                        PlayerData p = gameData.getPlayerByName(nick);
+                        // Special immunity
+                        if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
+                            p.setLives(p.getLives()-1);
+                        }
+                    }
+                }
 
                 // Update clients
-                broadcastGameData();
+                broadcastPublicGameData();
 
-                // Blocks and jumps dont choice
-                if (p.getCardValue() == BLOCK_VALUE || p.getCardValue() == JUMP_VALUE) {
-                    p.setMyTurn(false); 
-                    continue;
-                }
-
-                // Wait the choice
-                client.askPlay();
-                boolean choice;
-                synchronized (client) {
-                    //TODO action timer, timeout kick
-
-                    while (clientData == null && client.isConnected()) {
-                        try {
-                            client.wait();
-                        } catch (InterruptedException e) {
-                            System.err.println("Error reading data: " + e.getMessage());
-                        }
-                    }
-                    if (clientData != null)
-                        choice = (Boolean)clientData;
-                    else 
-                        choice = false; //default is staying
-                    
-                    clientData = null;
-
-                    p.setChoice(choice);
-                }
-
-                // Execute change
-                if (choice) {
-                    if (p.isDealer()) {
-                        // Change with the deck
-                        p.setCard(deck.removeFirst());
-                    }
-                    else {
-                        PlayerData next = null;
-                        int nextIndex = i + 1;
-
-                        // Find the next player (up to the dealer, last in turn) without a jump card
-                        while (nextIndex < turnNicks.size()) {
-                            PlayerData candidate = gameData.getPlayerByName(turnNicks.get(nextIndex));
-
-                            if (candidate.getCardValue() != JUMP_VALUE) {
-                                next = candidate;
-                                break;
-                            }
-
-                            // Uncover the jump card
-                            uncoveredCards.add(candidate.getCard());
-                            nextIndex++;
-                        }
-
-                        if (next == null) {
-                            // Everyone after me (dealer included) has a jump card: change with the deck
-                            p.setCard(deck.removeFirst());
-                        }
-                        else if (next.getCardValue() == BLOCK_VALUE) {
-                            // Block card blocks the exchange
-                            uncoveredCards.add(next.getCard());
-                        }
-                        else {
-                            // Exchange cards
-                            String temp = next.getCard();
-                            next.setCard(p.getCard());
-                            p.setCard(temp);
-                        }
+                // Find dead players
+                for (int i = 0; i < gameData.size(); i++) {
+                    PlayerData p = gameData.getPlayer(i);
+                    int n = turnNicks.indexOf(p.getNick());
+                    if (p.getLives() <= 0) {
+                        playerToSpectator(turn.get(n));
                     }
                 }
 
-                p.setMyTurn(false);
-            }
-
-            // Calculate the leasts card values
-            ArrayList<String> leasts = new ArrayList<>();
-            ArrayList<String> highests = new ArrayList<>();
-
-            int min = Integer.MAX_VALUE;
-            int max = Integer.MIN_VALUE;
-
-            for (int i = 0; i < gameData.size(); i++) {
-                PlayerData p = gameData.getPlayer(i);
-                int v = p.getCardValue();
-
-                // skip special
-                if (v == -1) continue;
-
-                if (v < min) {
-                    leasts.clear();
-                    leasts.add(p.getNick());
-                    min = v;
-                }
-                else if (v == min) {
-                    leasts.add(p.getNick());
-                }
-
-                if (v > max) {
-                    highests.clear();
-                    highests.add(p.getNick());
-                    max = v;
-                }
-                else if (v == max) {
-                    highests.add(p.getNick());
-                }
-            }
-
-            // Find SPECIAL_LOSE_CODE
-            PlayerData specialLose = null;
-            for (int i = 0; i < gameData.size(); i++) {
-                PlayerData p = gameData.getPlayer(i);
-
-                if (SPECIAL_LOSE_CODE.equals(p.getCard())) {
-                    specialLose = p;
-                    break;
-                }
-            }
-
-            // Find losers
-            //on second and fourth case if all cards are the same (min == max) its a tie 
-            if (specialLose != null) {
-                specialLose.setLives(specialLose.getLives()-1);
-            }
-            else if (leasts.size() == 1) {
-                // The player with the worst card
-                PlayerData p = gameData.getPlayerByName(leasts.getLast());
-                
-                // Special immunity
-                if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
-                    p.setLives(p.getLives()-1);
-                }
-            }
-            else if (leasts.size() == 2 && min != max) {
-                // Players with the highest card
-                for (String nick : highests) {
-                    PlayerData p = gameData.getPlayerByName(nick);
-                    // Special immunity
-                    if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
-                        p.setLives(p.getLives()-1);
+                // Check if there is only one player playing
+                if (turn.size() <= 1) {
+                    String winner = turnNicks.get(0);
+                    for (ServerThread client : pool) {
+                        client.sendWinner(winner);
                     }
-                }
-            }
-            else if (leasts.size() == 3) {
-                // Only the dealer (which is always the last in turn)
-                PlayerData p = gameData.getPlayerByName(turnNicks.getLast());
-                // Special immunity
-                if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
-                    p.setLives(p.getLives()-1);
-                }
-            }
-            else if (leasts.size() == 4 && min != max) {
-                // Everybody but players with the worst card
-                for (String nick :turnNicks) {
-                    if (leasts.contains(nick)) continue;
 
-                    PlayerData p = gameData.getPlayerByName(nick);
-                    // Special immunity
-                    if (! (p.getCard().equals(SPECIAL_LOSE_CODE) || p.getCard().equals(SPECIAL_SAVE_CODE) )) {
-                        p.setLives(p.getLives()-1);
-                    }
+                    gameStarted = false;
                 }
-            }
 
-            // Update clients
-            broadcastPublicGameData();
-
-            // Find dead players
-            for (int i = 0; i < gameData.size(); i++) {
-                PlayerData p = gameData.getPlayer(i);
-                int n = turnNicks.indexOf(p.getNick());
-                if (p.getLives() <= 0) {
-                    playerToSpectator(turn.get(n));
+                // Wait for new round
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    System.err.println("Error sleeping: " + e.getMessage());
                 }
-            }
-
-            // Wait for new round
-            try {
-                Thread.sleep(5000);
-            } catch (InterruptedException e) {
-                System.err.println("Error sleeping: " + e.getMessage());
             }
         }
     }
