@@ -1,8 +1,6 @@
 package Client.Ui;
 
-//! UI DRAFT
-//TODO project and connect to client
-//TODO implement and do a controller for Ui input
+//TODO improve and add special cards
 
 import javax.swing.*;
 import java.awt.*;

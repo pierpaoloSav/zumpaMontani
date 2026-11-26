@@ -17,10 +17,14 @@ public class Client {
     private ObjectInputStream input;
     private ObjectOutputStream output;
 
+    private GameData data;
+
     public Client(String name, int port) {
         this.name = name;
         this.port = port;
         this.client = null;
+
+        this.data = null;
     }
 
     public void connectClient() throws IOException {
@@ -48,11 +52,14 @@ public class Client {
         return output;
     }
 
-    public static void main(String[] args) {
-        Client client = new Client("localhost", 6060);
+    public GameData getGameData() {
+        return this.data;
+    }
+
+    public void run() {
         Scanner sc = new Scanner(System.in);
         try {
-            client.connectClient();
+            connectClient();
 
             Thread writing = new Thread() {
                 @Override 
@@ -72,8 +79,8 @@ public class Client {
                                 roomData.setActionTimer(10);
                                 roomData.setTimeoutKick(60);
                                 
-                                client.getOutput().writeObject("R01");
-                                client.getOutput().writeObject(roomData);
+                                getOutput().writeObject("R01");
+                                getOutput().writeObject(roomData);
                             } catch (IOException e) {
                                 System.err.println("Error in stream output: " + e.getMessage());
                             }
@@ -85,15 +92,15 @@ public class Client {
                                 namePin.add("12345");
                                 namePin.add("Pierpi133");
                                 
-                                client.getOutput().writeObject("R02");
-                                client.getOutput().writeObject(namePin);
+                                getOutput().writeObject("R02");
+                                getOutput().writeObject(namePin);
                             } catch (IOException e) {
                                 System.err.println("Error in stream output: " + e.getMessage());
                             }
                         }
                         else {
                             try {
-                                client.getOutput().writeObject(in);
+                                getOutput().writeObject(in);
                             } catch (IOException e) {
                                 System.err.println("Error in stream output: " + e.getMessage());
                             }
@@ -107,7 +114,7 @@ public class Client {
             while (true) {
                 try {
                     // Protocol response
-                    Object message = client.getInput().readObject();
+                    Object message = getInput().readObject();
 
                     if (message instanceof String msg) {
                         if (msg.equals("0")) {
@@ -136,7 +143,7 @@ public class Client {
                         }
 
                         if (msg.equals("PD")) {
-                            Object data = (GameData)client.getInput().readObject();
+                            data = (GameData)getInput().readObject();
                             System.out.println(data.toString());
                         }
                         if (msg.equals("P")) {
@@ -144,7 +151,7 @@ public class Client {
                         }
 
                         if (msg.equals("V")) {
-                            Object data = (String)client.getInput().readObject();
+                            Object data = (String)getInput().readObject();
                             System.out.println("VINCITORE: " + data);
                         }
                     }
@@ -158,7 +165,7 @@ public class Client {
         finally {
             try {
                 sc.close();
-                client.close();
+                close();
             } catch (Exception e) {
                 System.err.println("Error while closing client: " + e.getMessage());
             }
